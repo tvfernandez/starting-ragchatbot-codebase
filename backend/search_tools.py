@@ -89,29 +89,112 @@ class CourseSearchTool(Tool):
         """Format search results with course and lesson context"""
         formatted = []
         sources = []  # Track sources for the UI
-        
+
         for doc, meta in zip(results.documents, results.metadata):
             course_title = meta.get('course_title', 'unknown')
             lesson_num = meta.get('lesson_number')
-            
+
             # Build context header
             header = f"[{course_title}"
             if lesson_num is not None:
                 header += f" - Lesson {lesson_num}"
             header += "]"
-            
-            # Track source for the UI
-            source = course_title
+
+            # Retrieve lesson link from course_catalog
+            lesson_link = None
+            if course_title and lesson_num is not None:
+                lesson_link = self.store.get_lesson_link(course_title, lesson_num)
+
+            # Create structured source object with text and URL
+            source = {
+                "text": course_title,
+                "url": lesson_link  # Could be None if not found
+            }
             if lesson_num is not None:
-                source += f" - Lesson {lesson_num}"
+                source["text"] += f" - Lesson {lesson_num}"
             sources.append(source)
-            
+
             formatted.append(f"{header}\n{doc}")
-        
+
         # Store sources for retrieval
         self.last_sources = sources
-        
+
         return "\n\n".join(formatted)
+
+
+class CourseOutlineTool(Tool):
+    """Tool for retrieving complete course outlines with all lessons"""
+
+    def __init__(self, vector_store: VectorStore):
+        self.store = vector_store
+
+    def get_tool_definition(self) -> Dict[str, Any]:
+        """Return Anthropic tool definition for this tool"""
+        return {
+            "name": "get_course_outline",
+            "description": "Get the complete outline of a course including all lessons",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "course_name": {
+                        "type": "string",
+                        "description": "Course title (partial matches work, e.g. 'MCP', 'Introduction')"
+                    }
+                },
+                "required": ["course_name"]
+            }
+        }
+
+    def execute(self, course_name: str) -> str:
+        """
+        Execute the course outline tool with given course name.
+
+        Args:
+            course_name: The course to get the outline for
+
+        Returns:
+            Formatted course outline or error message
+        """
+        # Get course metadata from vector store
+        metadata = self.store.get_course_metadata(course_name)
+
+        # Handle case where course is not found
+        if not metadata:
+            return f"No course found matching '{course_name}'."
+
+        # Format the course outline
+        return self._format_outline(metadata)
+
+    def _format_outline(self, metadata: Dict[str, Any]) -> str:
+        """Format course metadata into a readable outline"""
+        lines = []
+
+        # Add course title
+        lines.append(f"Course: {metadata['title']}")
+
+        # Add course link if available
+        if metadata.get('course_link'):
+            lines.append(f"Link: {metadata['course_link']}")
+
+        # Add instructor if available
+        if metadata.get('instructor'):
+            lines.append(f"Instructor: {metadata['instructor']}")
+
+        # Add lessons section
+        lessons = metadata.get('lessons', [])
+        if lessons:
+            lines.append("\nLessons:")
+            for lesson in lessons:
+                lesson_num = lesson.get('lesson_number')
+                lesson_title = lesson.get('lesson_title')
+                lesson_link = lesson.get('lesson_link')
+
+                lines.append(f"Lesson {lesson_num}: {lesson_title}")
+                if lesson_link:
+                    lines.append(f"Link: {lesson_link}")
+
+        return "\n".join(lines)
+
 
 class ToolManager:
     """Manages available tools for the AI"""
